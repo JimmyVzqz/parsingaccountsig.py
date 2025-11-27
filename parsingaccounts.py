@@ -38,6 +38,24 @@ import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+def get_username_from_item(item):
+    """
+    Función auxiliar para intentar extraer el usuario usando ambas estrategias:
+    1. Busca en 'title' (común en Following reciente)
+    2. Busca en 'string_list_data' -> 'value' (común en Followers)
+    """
+    # Estrategia 1: Campo 'title'
+    if "title" in item and item["title"]:
+        return item["title"]
+    
+    # Estrategia 2: Campo 'value' dentro de la lista
+    if "string_list_data" in item and item["string_list_data"]:
+        try:
+            return item["string_list_data"][0].get("value")
+        except IndexError:
+            return None
+    return None
+
 def process_instagram_zip():
     # Open file dialog to select ZIP file
     zip_path = filedialog.askopenfilename(filetypes=[("ZIP files", "*.zip")])
@@ -59,35 +77,45 @@ def process_instagram_zip():
 
         for dirpath, dirs, files in os.walk(temp_dir):
             for file in files:
-                if "followers_1" in file.lower() and file.endswith(".json"):
+                filename = file.lower()
+                if "followers" in filename and "1" in filename and filename.endswith(".json"):
                     followers_file = os.path.join(dirpath, file)
-                elif "following" in file.lower() and file.endswith(".json"):
+                elif "following" in filename and filename.endswith(".json"):
                     following_file = os.path.join(dirpath, file)
 
         if not followers_file or not following_file:
             messagebox.showerror("Error", "Could not find both followers and following JSON files.")
             return
 
-        # Load followers
+        # --- PROCESS FOLLOWERS ---
         with open(followers_file, "r", encoding="utf-8") as f:
             followers_data = json.load(f)
+            # A veces viene envuelto en un diccionario
+            if isinstance(followers_data, dict) and "relationships_followers" in followers_data:
+                followers_data = followers_data["relationships_followers"]
 
-        followers = set(
-            item["string_list_data"][0]["value"]
-            for item in followers_data
-            if item.get("string_list_data")
-        )
+        followers = set()
+        for item in followers_data:
+            user = get_username_from_item(item)
+            if user:
+                followers.add(user)
 
-        # Load following
+        # --- PROCESS FOLLOWING ---
         with open(following_file, "r", encoding="utf-8") as f:
-            following_data = json.load(f)["relationships_following"]
+            raw_following = json.load(f)
+            # A veces viene envuelto en 'relationships_following'
+            if isinstance(raw_following, dict) and "relationships_following" in raw_following:
+                following_data = raw_following["relationships_following"]
+            else:
+                following_data = raw_following
 
-        following = set(
-            item["string_list_data"][0]["value"]
-            for item in following_data
-            if item.get("string_list_data")
-        )
+        following = set()
+        for item in following_data:
+            user = get_username_from_item(item)
+            if user:
+                following.add(user)
 
+        # Calculate difference
         not_following_back = sorted(following - followers)
 
         if not not_following_back:
@@ -96,10 +124,16 @@ def process_instagram_zip():
 
         # Show results in a new window
         result_window = tk.Toplevel(root)
-        result_window.title("Not Following Back")
+        result_window.title(f"Not Following Back ({len(not_following_back)})")
 
-        text = tk.Text(result_window, wrap="word", height=30, width=50)
+        # Scrollbar añadida (recomendado para listas largas)
+        scrollbar = tk.Scrollbar(result_window)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        text = tk.Text(result_window, wrap="word", height=30, width=50, yscrollcommand=scrollbar.set)
         text.pack(padx=10, pady=10)
+        
+        scrollbar.config(command=text.yview)
 
         for user in not_following_back:
             text.insert(tk.END, user + "\n")
@@ -118,4 +152,3 @@ button = tk.Button(root, text="Choose File", command=process_instagram_zip)
 button.pack(pady=5)
 
 root.mainloop()
-
